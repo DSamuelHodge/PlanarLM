@@ -1,3 +1,5 @@
+# Do not track project notes or hardware design files
+verilog.md
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
