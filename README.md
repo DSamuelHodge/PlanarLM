@@ -21,9 +21,6 @@ model = PlanarLM()
 # Custom instantiation
 model = PlanarLM(vocab_size=128, channels=32, num_wires=3, depth=2)
 
-# Advanced: from config dict or argparse.Namespace (for experiment scripts)
-# config = {"vocab_size": 128, "channels": 32}
-# model = PlanarLM.from_config(config)
 ```
 
 ## Testing
