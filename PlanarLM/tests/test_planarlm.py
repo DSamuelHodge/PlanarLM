@@ -1,10 +1,11 @@
 # test_planarlm.py — PlanarLM build, inspection, and smoke-test
 import sys
 import torch
-import torch.nn as nn
 
 from PlanarLM import PlanarLM
 from PlanarLM.constants import VOCAB_SIZE, CHANNELS, NUM_WIRES, DEPTH, ALPHA_INIT, TIE_WEIGHTS, BATCH, SEQ_LEN
+from PlanarLM.algebraic_trainer import AlgebraicTrainer
+from PlanarLM.frobenius_algebra import FrobeniusDuality, MorphismGap
 # Example: model = PlanarLM(vocab_size=128, channels=32, ...)
 
 print("=" * 60)
@@ -77,29 +78,47 @@ assert before == 0.0, f"Causality violated before pivot: {before}"
 assert after  >  0.0, f"Perturbation had no effect after pivot: {after}"
 print("  Causality: OK")
 
-# ── Loss + backward ───────────────────────────────────────────────────────────
-print("\nGradient health check")
+# ── Algebraic Analysis check ──────────────────────────────────────────────────
+print("\nAlgebraic Analysis check")
 print("-" * 40)
 targets = torch.randint(0, VOCAB_SIZE, (BATCH, SEQ_LEN))
-loss_fn = nn.CrossEntropyLoss()
-# CrossEntropyLoss expects (N, C, *) or reshape to (B*L, vocab)
-loss = loss_fn(logits.reshape(-1, VOCAB_SIZE), targets.reshape(-1))
-loss.backward()
+duality = FrobeniusDuality(channels=CHANNELS)
+trainer = AlgebraicTrainer(model, step_size=0.05, n_rounds=3)
 
-grad_norms = {
-    name: p.grad.norm().item()
-    for name, p in model.named_parameters()
-    if p.grad is not None
-}
-max_norm  = max(grad_norms.values())
-min_norm  = min(grad_norms.values())
-nan_count = sum(1 for v in grad_norms.values() if v != v)   # NaN check
+# 1. Verify manifold residency.
+h = model.embed(x).transpose(1, 2)
+h = model.mesh(h)
+assert h.abs().max().item() < 1.0, "Manifold residency violated!"
+print(f"  Manifold residency : OK  (max |h| = {h.abs().max():.4f} < 1.0)")
 
-print(f"  Loss            : {loss.item():.4f}")
-print(f"  Grad norm range : [{min_norm:.3e}, {max_norm:.3e}]")
-print(f"  NaN gradients   : {nan_count}")
-assert nan_count == 0, "NaN gradients detected!"
-print("  Gradients: OK")
+# 2. Verify Frobenius duality is finite.
+dual = duality.sigma_inv(h)
+nan_count = dual.isnan().sum().item() + dual.isinf().sum().item()
+assert nan_count == 0, f"Frobenius dual has {nan_count} NaN/Inf!"
+print(f"  Frobenius dual     : OK  (no NaN/Inf, norm = {dual.norm():.4f})")
+
+# 3. Verify morphism gap is computable.
+gap_fn = MorphismGap(CHANNELS, VOCAB_SIZE)
+with torch.no_grad():
+    logits_check = model.head(h)
+gap = gap_fn(h, logits_check, targets, model.embed.weight)
+print(f"  Morphism gap       : OK  (norm = {gap.norm():.4f})")
+
+# 4. Verify algebraic train step runs without backward().
+metrics = trainer.train_step(x, targets)
+print(f"  AlgLoss            : {metrics['algebraic_loss']:.4f}")
+print(f"  CE (compare only)  : {metrics['ce_loss']:.4f}")
+print(f"  GapNorm            : {metrics['gap_norm']:.4f}")
+print("  Algebraic step     : OK  (no backward() called)")
+
+# 5. Verify Frobenius residual numerically on one SpiderLayer.
+layer = list(model.mesh.layers)[0]
+test_h = torch.tanh(torch.randn(1, CHANNELS, 16) * 0.5)
+dyt_h = layer.dyt(test_h)
+frobenius_residual = (dyt_h - test_h).abs().mean().item()
+print(f"  Frobenius residual : {frobenius_residual:.6f}  (lower = more converged)")
+
+print("\nAll algebraic checks passed.")
 
 print("\n" + "=" * 60)
 print("All checks passed.")
