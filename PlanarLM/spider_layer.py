@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .constants import CHANNELS, ALPHA_INIT
+from .frobenius_algebra import PlanarCoproductCorrection, FrobeniusNormalForm
 
 
 class SpiderLayer(nn.Module):
@@ -38,6 +39,8 @@ class SpiderLayer(nn.Module):
         self.gamma = nn.Parameter(torch.ones(1, channels * 2, 1))
         self.beta  = nn.Parameter(torch.zeros(1, channels * 2, 1))
         self.debug = debug
+        self.coproduct = PlanarCoproductCorrection(channels=channels, dilation=dilation)
+        self.normalizer = FrobeniusNormalForm(channels=channels, alpha_init=alpha_init)
 
     def dyt(self, x: torch.Tensor) -> torch.Tensor:
         """γ · tanh(α · x) + β  — retracts ℝ^{2C} → (−1,1)^{2C} coordinatewise.
@@ -60,3 +63,14 @@ class SpiderLayer(nn.Module):
         if self.debug:
             print(f"[SpiderLayer] output shape: {out.shape}")
         return out
+
+    def algebraic_update(
+        self,
+        x: torch.Tensor,
+        correction: torch.Tensor,
+        step_size: float = 0.1,
+    ) -> torch.Tensor:
+        """Apply a planar Frobenius coproduct correction without gradients."""
+        f_corr, g_corr = self.coproduct(correction)
+        corrected = x + step_size * (f_corr * g_corr)
+        return self.normalizer(corrected)

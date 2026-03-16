@@ -96,3 +96,24 @@ class ManifoldProjectionHead(nn.Module):
         if self.debug:
             print(f"[ManifoldHead] logits shape: {out.shape}")
         return out
+
+    def frobenius_dual(self, h: torch.Tensor) -> torch.Tensor:
+        """Return sigma^{-1}(h) using atanh lift weighted by Fisher-Rao term."""
+        eps = 1e-6
+        h_safe = h.clamp(-1.0 + eps, 1.0 - eps)
+        fisher_w = 1.0 / (1.0 - h_safe**2 + eps)
+        return torch.atanh(h_safe) * fisher_w
+
+    def algebraic_loss(
+        self,
+        h: torch.Tensor,
+        targets: torch.Tensor,
+        embed_weight: torch.Tensor,
+    ) -> torch.Tensor:
+        """Fisher-weighted tangent-space gap norm against target embeddings."""
+        t = embed_weight[targets].transpose(1, 2)
+        h_t = self.log_map(h)
+        eps = 1e-6
+        h_safe = h.clamp(-1.0 + eps, 1.0 - eps)
+        fisher_w = 1.0 / (1.0 - h_safe**2 + eps)
+        return (fisher_w * (t - h_t) ** 2).mean()
